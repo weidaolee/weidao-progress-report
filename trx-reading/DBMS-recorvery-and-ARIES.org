@@ -1,9 +1,9 @@
 #+title: DBMS Recorvery and ARIES
 #+OPTIONS: \n:t
 * Buffer Pool Management Policy
- * steal/no-streal policy
+ * steal/no-streal policy \\
    指的是在 trx 运行期间且尚未 commit 之前, trx 造成的 dirty page 能否复盖 on-disk system 中的 page, 如果可以则是 steal, 否则是 no-steal
- * force/no-force
+ * force/no-force \\
    指的是在 trx commit 时, trx 造成的 dirty page 是否必须复盖 on-disk system 中的 page, 如果必须复盖则是 force, 否则是 no-force
 * Write Ahead Logging (WAL)
 WAL 是一种轻量的、顺序写的 Log, 纪录了对应了 trx 在运行过程中的一次对数据项的改变, Log 包含足够的信息, 当崩溃恢复时, DBMS 能透过 redo 操作与 undo 操作恢复到正确的状态上。
@@ -17,9 +17,9 @@ WAL 基本 entry:
    用于 re-apply 对 page 的修改
 ** WAL Protocol
  * DBMS 首先将 WAL 放在 volatile storage 上, 通常是 Log Buffer Pool
- * DBMS 必须先 write Log to disk, 与之对应的 dirty page 才允许被 flush to disk
+ * DBMS 必须先 write Log to disk, 与之对应的 dirty page 才允许被 flush to disk \\
    trx 运行的过程中以顺序的、轻量的写入 WAL, 兼顾性能与 ACID 中的 D
- * 一个 trx 的所有的 Log 被 write Log to disk, 该 trx 才允许被 committed
+ * 一个 trx 的所有的 Log 被 write Log to disk, 该 trx 才允许被 committed \\
    trx 如果 abort 或是意外中止, WAL 中包含足够的信息将这些影响撤销到 trx 开始前的状态上; 并且, 如果 Log 是完整的, 即便对应的 page 没有被 flush, WAL 中包含足够的信息将这些影响 re-apply 到这些 page 上, 支持了 ACID 中的 ACD
 ** Implementation
 *** Log Buffer Pool 是否要独立于 Buffer Pool
@@ -39,9 +39,9 @@ InnoDB 引入 mini-transaction 来确保这两种情况不会发生:
 另外, WAL 频繁的 commit 同样会成為 DBMS 性能的瓶颈, 因此 WAL 应以 batch 方式 commit
 ** WAL is a Steal, No-Force policy
 这裡说明谓何 WAL 是一个 Steal, No-Force 的 policy:
- * 在 trx 在进行中尚未 commit
+ * 在 trx 在进行中尚未 commit \\
    其对映的 dirty page 可能被 flush, 这取决于该 page 最新的 WAL 是否已经被 flush
- * 在 trx commit 时对映的 page 是否要 flush
+ * 在 trx commit 时对映的 page 是否要 flush \\
    trx 产生的最后一条 WAL 如果被 flush, 就不需要立刻 flush dirty page
 
 崩溃恢复时, 我们从 on-disk system 中拿到的 page 可能是 dirty 的, 并且混杂了提交过/未提交过的状态, 但是可以透过 WAL 提供的信息, re-apply 所有的修改, 这样已提交的数据就回到正确的状态, 而不完整的 trx 我们透过 undo 撤销这些变化, 撤销到 trx 开始之前。这个详细的过程需要 ARIES 机制会更详细讨论。
@@ -106,11 +106,11 @@ DBMS 可以透过以下规则判定对于指定的 dirty page 是否已经可以
  * COMMIT 成功后, DBMS 生成一个 <TRX-END> 表示 trx 正常结束
 注意, <TRX-END> 不必在 commit 发生后立即被 write to disk, 只须满足 $$ pageLSN_{x} \leq flushedLSN $$ 即可。
 *** Transaction ABORT
- * *Compensation Log Record (CLR)*
+ * *Compensation Log Record (CLR)* \\
    如果 abort 发生, DBMS 要回退到上一个正确的状态, 也就是回到 trx 开始前的状态。 如果我们将 undo 认為是 update 的逆操作, 而我们又為每一次 update 操作都生成了 WAL; 则我们也应该為每一次 undo 操作生成 WAL, 并且将 undo 操作看成是对 DBMS 数据状态更新的一种 update 操作, 这种针对 undo 操作生成的 WAL 称為 *Compensation Log Record (CLR)*
- * *prevLSN*
+ * *prevLSN* \\
    由于 CLR 是由 DBMS 生成的, DBMS 要透过根据 WAL 中的 *befor value* 去构造 CLR。 在只有一个 trx 执行的情况下, 只需要沿著 WAL 逆序扫描就可以构造对应的 CLR, 但是在支持并发的 DBMS 下无法这样做, 因此对于 WAL, 需要额外纪录 *prevLSN* 来指向前一笔 WAL (应该是一个 offset), 这样在构造 CLR 后可以透过 *prevLSN* 找到下一笔需要构造 CLR 的 WAL
- * *UndoNext*
+ * *UndoNext* \\
    生成 CLR 时, 会将对应 WAL 的 *prevLSN* 纪录為 CLR 的 *UndoNext*, 这样在 WAL 形成一个 doubly linked list 结构
 
 在 trx 进行 abort 时:
