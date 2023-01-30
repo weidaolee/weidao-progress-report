@@ -103,7 +103,7 @@ $$pageLSN_{x} \leq flushedLSN$$
  * DBMS 会生成一个 <TRX-COMMIT> 的 WAL
  * DBMS 确保 trx 所有的 WAL (包含 <TRX-COMMIT>) 被 flushed, 此行為称為 COMMIT
  * COMMIT 成功后, DBMS 生成一个 <TRX-END> 表示 trx 正常结束
-注意, <TRX-END> 不必在 commit 发生后立即被 write to disk, 只须满足 $$pageLSN_{x} \leq flushedLSN$$ 即可。
+注意, <TRX-END> 不必在 commit 发生后立即被 write to disk
 *** Transaction ABORT
  * *Compensation Log Record (CLR)* \\
    如果 abort 发生, DBMS 要回退到上一个正确的状态, 也就是回到 trx 开始前的状态。 如果我们将 undo 认為是 update 的逆操作, 而我们又為每一次 update 操作都生成了 WAL; 则我们也应该為每一次 undo 操作生成 WAL, 并且将 undo 操作看成是对 DBMS 数据状态更新的一种 update 操作, 这种针对 undo 操作生成的 WAL 称為 *Compensation Log Record (CLR)*
@@ -153,8 +153,8 @@ ARIES Recorvery 需要经历三个 phases:
  * 如果 WAL 是 <TRX-COMMIT>, 将其 ATT entry status 设為 C: Commit
  * 如果 WAL 是 <TRX-END>, 将其移出 ATT
 
-并且, 对于 update records 的 page $$P$$:
- * 如果 $$P \notin DPT$$, 则表示该 WAL 是第一次使 $$P$$ 成為 dirty page 的 WAP, 将 $$P$$ 加入 $$DPT$$, 并将其 $$recLSN := LSN$$
+并且, 对于 update records 的 page:
+ * 如果 page 不在 DPT 内, 则表示该 WAL 是第一次使 page 成為 dirty page 的 WAL, 将 page 加入 DPT, 并将其 recLSN 设置為 该 LSN
 
 直到走到 WAL 结束, 表示此时 ATT, DPT 是崩溃发生时的状态:
 #+ATTR_ORG: :width 60% :page 1
@@ -162,24 +162,24 @@ ARIES Recorvery 需要经历三个 phases:
 ** Redo Phase
 Analysis Phase 结束时:
  * DPT 已经在 Analysis Phase 被推进到 crash 时的 DPT
- * 所有 DPT 的 page, 都已经有正确的 $$recLSN$$
+ * 所有 DPT 的 page, 都已经有正确的 recLSN
 
-Rodo Phase 从 DPT 中, $$recLSN$$ 最小的开始, 对于所有的 update records 和 $$CLR$$, 都需要 *redo*, 除非满足以下条件之一:
+Rodo Phase 从 DPT 中, recLSN 最小的开始, 对于所有的 update records 和 CLR, 都需要 *redo*, 除非满足以下条件之一:
  * page 不在 DPT 内, 说明 crash 时 page 不是 dirty page, *or*
- * page 在 DPT 内, 但其 $$LSN < recLSN$$, 表示该 WAL 不是造成本次 dirty page 的 WAL
+ * page 在 DPT 内, 但其 LSN < recLSN, 表示该 WAL 不是造成本次 dirty page 的 WAL
 
 *redo action* 是以下一系列操作:
  * reapply logged update to buffered page
- * update $$pageLSN$$ to log's $$LSN$$
+ * update pageLSN to log's LSN
 
 *redo action* 不做额外的 logging, 也不做 flush page, 因此中途失败最多是重新经历 Analysis Phase 和 Redo Phase
 在所有 *redo action* 做完后, 对在 ATT 中所有已经是 C 状态的 trx:
  * 写入一个 <TRX-END>
  * 将 trx 移出 ATT
 ** Undo Phase
-Undo Phase 开始时, ATT 只会剩下 U 状态的 trx, 并且 ATT 的状态已经被推进到 crash 发生时的状态, 所以每个 ATT 中 trx 的 $$lastLSN$$ 都是该 trx 最后一次对 page 造成影响的 $$LSN$$
+Undo Phase 开始时, ATT 只会剩下 U 状态的 trx, 并且 ATT 的状态已经被推进到 crash 发生时的状态, 所以每个 ATT 中 trx 的 lastLSN 都是该 trx 最后一次对 page 造成影响的 LSN
 *undo action*:
- * 透过 $$lastLSN$$ 找到最新一笔 WAL
- * 生成对应的 $$CLR$$
- * update page 的 $$pageLSN$$
+ * 透过 lastLSN 找到最新一笔 WAL
+ * 生成对应的 CLR
+ * update page 的 pageLSN
  * apply undo to buffered page
