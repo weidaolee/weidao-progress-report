@@ -1,0 +1,186 @@
+#+title: DBMS Recorvery and ARIES
+#+OPTIONS: \n:t
+* Buffer Pool Management Policy
+ * steal/no-streal policy
+   指的是在 trx 运行期间且尚未 commit 之前, trx 造成的 dirty page 能否复盖 on-disk system 中的 page, 如果可以则是 steal, 否则是 no-steal
+ * force/no-force
+   指的是在 trx commit 时, trx 造成的 dirty page 是否必须复盖 on-disk system 中的 page, 如果必须复盖则是 force, 否则是 no-force
+* Write Ahead Logging (WAL)
+WAL 是一种轻量的、顺序写的 Log, 纪录了对应了 trx 在运行过程中的一次对数据项的改变, Log 包含足够的信息, 当崩溃恢复时, DBMS 能透过 redo 操作与 undo 操作恢复到正确的状态上。
+
+WAL 基本 entry:
+ * trx id
+ * object id
+ * befor value (UNDO)
+   用于 abort 或撤销不完整的 trx 操作, 如果采取 append-only MVCC, 则此项非必须 (如 PostgreSQL)
+ * after value (REDO)
+   用于 re-apply 对 page 的修改
+** WAL Protocol
+ * DBMS 首先将 WAL 放在 volatile storage 上, 通常是 Log Buffer Pool
+ * DBMS 必须先 write Log to disk, 与之对应的 dirty page 才允许被 flush to disk
+   trx 运行的过程中以顺序的、轻量的写入 WAL, 兼顾性能与 ACID 中的 D
+ * 一个 trx 的所有的 Log 被 write Log to disk, 该 trx 才允许被 committed
+   trx 如果 abort 或是意外中止, WAL 中包含足够的信息将这些影响撤销到 trx 开始前的状态上; 并且, 如果 Log 是完整的, 即便对应的 page 没有被 flush, WAL 中包含足够的信息将这些影响 re-apply 到这些 page 上, 支持了 ACID 中的 ACD
+** Implementation
+*** Log Buffer Pool 是否要独立于 Buffer Pool
+个人认為 Log Buffer Pool 独立于 Buffer Pool, 理由有以下:
+ 1. Log Buffer 的 I/O 是线性的, Buffer Pool 是随机的
+ 2. Log Buffer 的 I/O 采取 buffered I/O, 会利用 file system 中的 page cache 机制; 而 Buffer Pool 是 direct I/O, 因為 DBMS 可以根据整体 query 的情况调整 page cache 的策略, 这些是 OS 层感知不到的
+ 3. Log Buffer 只服务写请求, 而 Buffer Pool 需要服务读写请求, 两者独立也更方便透过配置合理的内存提高 DBMS 的服务能力
+*** 考虑 trx 对 B+ tree 的改变
+考虑到 B+ tree, 就需要考虑以下情况:
+ 1. 某些操作会连带 B+ tree 的结构产生变化, 当崩溃恢复时, B+ tree 也需要回到正确状态, 因此某些 WAL 必须形成一个 atomic 的 group, WAL 产生时必须要整个 group 一起提交
+ 2. 另外, DBMS 支持并发写, 因此 WAL 是并发提交的, 需要确保并发提交顺序不会破坏可恢复性
+
+InnoDB 引入 mini-transaction 来确保这两种情况不会发生:
+ 1. WAL 以 mini-transaction 為一个原子单位, 在一个 mini-transaction 内的 WAL 是同一个 trx 的、且有序性的
+ 2. 只要确保 WAL 以 mini-transaction 為一个原子单位, 则并发提交顺序就不会影响到 B+ tree 的恢复
+
+另外, WAL 频繁的 commit 同样会成為 DBMS 性能的瓶颈, 因此 WAL 应以 batch 方式 commit
+** WAL is a Steal, No-Force policy
+这裡说明谓何 WAL 是一个 Steal, No-Force 的 policy:
+ * 在 trx 在进行中尚未 commit
+   其对映的 dirty page 可能被 flush, 这取决于该 page 最新的 WAL 是否已经被 flush
+ * 在 trx commit 时对映的 page 是否要 flush
+   trx 产生的最后一条 WAL 如果被 flush, 就不需要立刻 flush dirty page
+
+崩溃恢复时, 我们从 on-disk system 中拿到的 page 可能是 dirty 的, 并且混杂了提交过/未提交过的状态, 但是可以透过 WAL 提供的信息, re-apply 所有的修改, 这样已提交的数据就回到正确的状态, 而不完整的 trx 我们透过 undo 撤销这些变化, 撤销到 trx 开始之前。这个详细的过程需要 ARIES 机制会更详细讨论。
+
+* Checkpoint
+Steal, No-Force policy 的机制确保了在 runtime 有最好的性能, 但是 recovery 的性能可能会非常差, 因為一个长期运行的 DBMS 的 WAL 会不断增加, 导致 recorvery 期间需要对全量 WAL 分析、re-apply DBMS 期间所有的修改。
+
+如果 dirty page 被 flush 了, 则是必代表一部分的 WAL 不在有用了, 而 Checkpoint 技术简单来说就是在 WAL 上划一道分界线, 崩溃恢复时 checkpoint 以前已经 committed 已经不再重要, 只需要关注 checkpoint 前后尚未 committed 的 trx 即可。
+
+Checkpoint 机制有两种实现:
+ * Consistent Checkpoint
+ * Fuzzy Checkpoint (在 ARIES 讨论)
+** Consistent Checkpoint
+Consistent Checkpoint 是最 naive 的实现机制:
+ 1. Pause all queries
+ 2. Flush all WAL in memory to disk
+ 3. Flush all dirty page in the buffer pool to disk
+ 4. Write a <Checkpoint> entry to WAL and flush to disk
+ 5. Resume queries
+#+ATTR_ORG: :width 60% :page 1
+[[./images/consistent-checkpoint-example.pdf]]
+在崩溃恢复时, 以最后一个(最新的) <Checkpoint> 做為分析的起点:
+ * 在 <Checkpoint> 以前, 已经 committed 的 trx 不需要处理
+ * 在 <Checkpoint> 以前, 尚未 committed 的 trx 需要 REDO
+ * 在 <Checkpoint> 以后, 新开起的 trx 也需要 REDO
+ * 在 REDO 结束后, 如果存在尚未 committed 的 trx 需要 UNDO
+* ARIES: Algorithms for Recovery and Isolation Exploiting Semantics
+ARIES 在 WAL protocol 基础之上引入以下机制:
+ * 利用 *Log Sequence Numbers (LSN)* 来管理一切状态
+ * 利用 *Fuzzy Checkpoint* 技术
+** Log Sequence Numbers (LSN)
+ARIES 在 in-memory system 和 on-disk system 都需要纪录并 track 一些额外的信息, 以确保 DBMS 在任何时刻崩溃都能确保恢复后可以恢复, 这些额外的信息就是在各个 component 中被 track 的 *Log Sequence Numbers (LSN)*
+
+现在, 每一条 WAL 纪录都包含一个全局唯一的 *LSN*, *LSN* 是严格单调递增的, 它同时能表示所有操作 对 DBMS 改变的 physical order, 也可以看作是 WAL 的 id
+
+并且, 每一个 component 需要 track 属于自己负责的 *LSNs*:
+#+ATTR_ORG: :width 60% :page 1
+[[./images/LSNs.pdf]]
+ * *flushedLSN* 在 in-memory system 中, 负责 track 最新一笔被 write to disk 的 LSN
+ * *recLSN* 在 page 中, 负责 track 第一笔导致该 *page* 成為 dirty page 的 LSN
+ * *pageLSN* 在 page 中, 负责 track 最新一笔 update *page* 的 LSN
+ * *lastLSN* 在 trx 中, 负责 track 该 trx 最新一笔产生的 WAL 的 LSN
+ * *MasterRecord* 在 on-disk system 中, 负责 track 最新一次 checkpoint 的 LSN
+** ARIES WAL Protocol
+ARIES 的 WAL protocol:
+ * 每一笔 WAL 有全局唯一的 LSN
+ * 每一笔 update 操作对应的 WAL 被 flushed, *flushedLSN* 都会更新
+ * 每一笔 update 操作具体的 page, 该 page 的 *pageLSN* 都会被更新
+
+DBMS 可以透过以下规则判定对于指定的 dirty page 是否已经可以被 flush:
+  $$ pageLSN_{x} \leq flushedLSN $$
+** ARIES Normal Execution
+正常执行 分為两种:
+ * 在 trx 结束时, 正常 commit
+ * 在 trx 运行时, 主动调用 abort, 或是系统因為某些原因 abort 了 trx (deadlock, 或 constraints)
+
+这两种都称為正常执行是因為, DBMS 并没有崩溃, 只是决定是否推进到下一个状态或回退上一个状态。 会生成一个 <TRX-END> 的 LSN 做為 trx 的结束。
+*** Transaction COMMIT
+当 trx 进行 commit 时:
+ * DBMS 会生成一个 <TRX-COMMIT> 的 WAL
+ * DBMS 确保 trx 所有的 WAL (包含 <TRX-COMMIT>) 被 flushed, 此行為称為 COMMIT
+ * COMMIT 成功后, DBMS 生成一个 <TRX-END> 表示 trx 正常结束
+注意, <TRX-END> 不必在 commit 发生后立即被 write to disk, 只须满足 $$ pageLSN_{x} \leq flushedLSN $$ 即可。
+*** Transaction ABORT
+ * *Compensation Log Record (CLR)*
+   如果 abort 发生, DBMS 要回退到上一个正确的状态, 也就是回到 trx 开始前的状态。 如果我们将 undo 认為是 update 的逆操作, 而我们又為每一次 update 操作都生成了 WAL; 则我们也应该為每一次 undo 操作生成 WAL, 并且将 undo 操作看成是对 DBMS 数据状态更新的一种 update 操作, 这种针对 undo 操作生成的 WAL 称為 *Compensation Log Record (CLR)*
+ * *prevLSN*
+   由于 CLR 是由 DBMS 生成的, DBMS 要透过根据 WAL 中的 *befor value* 去构造 CLR。 在只有一个 trx 执行的情况下, 只需要沿著 WAL 逆序扫描就可以构造对应的 CLR, 但是在支持并发的 DBMS 下无法这样做, 因此对于 WAL, 需要额外纪录 *prevLSN* 来指向前一笔 WAL (应该是一个 offset), 这样在构造 CLR 后可以透过 *prevLSN* 找到下一笔需要构造 CLR 的 WAL
+ * *UndoNext*
+   生成 CLR 时, 会将对应 WAL 的 *prevLSN* 纪录為 CLR 的 *UndoNext*, 这样在 WAL 形成一个 doubly linked list 结构
+
+在 trx 进行 abort 时:
+ * 生成一个 <TRX-ABORT> 的 WAL
+ * 沿著 *prevLSN* 对 WAL 生成对应的 CLR
+ * 透过 WAL 的 *befor value* 恢复 undone 的值
+ * 当 *prevLSN* 指向 null 时说明 abort 结束, 此时 DBMS 生成一个 <TRX-END> 表示 trx 正常结束
+注意, CLRs 虽然也是一种 WAL, 但是 CLRs 不用被 undo 否则 abort 会形成 cycle 而永远无法结束
+** Fuzzy Checkpoint
+ * 在 checkpoint 開始時, 對 WAL 寫入一個 <CHECKPOINT-BEGIN>
+ * 在 checkpoint 運行時, 过程中不阻止其他 trx 寫入 WAL, 並且維護 *Active Transaction Table (ATT)* 和 *Dirty Page Table(DPT)*
+ * 在 checkpoint 結束時, 對 WAL 寫入一個 <CHECKPOINT-END>, <CHECKPOINT-END> 包含 checkpoint 期間的 ATT 和 DPT
+
+注意:
+ * ATT 只追踪 <CHECKPOINT-BEGIN> 开始前就活躍的 trx, <CHECKPOINT-BEGIN> 之后才开始的 trx 不追踪
+ * checkpoint 结束后 (<CHECKPOINT-END> 写入之后), *MasterRecord* 会纪录 <CHECKPOINT-BEGIN> 的 LSN, 表示一个成功的 checkpoint
+*** Active Transaction Table (ATT)
+*Active Transaction Table (ATT)* 用於 track 在 checkpoint 开始前就活躍的 trx, 每個 table entry 紀錄以下信息:
+ * trxID
+   trx 的 id
+ * status
+   trx 的狀態:
+    * R: Running
+    * C: Committing
+    * U: Candidate for Undo
+ * lastLSN
+   最新一次 trx create 的 LSN
+注意, 每個 ATT entry 在寫入 <TRX-END> 後被移出 ATT
+*** Dirty Page Table(DPT)
+*Dirty Page Table(DPT)* 用於 track 在 buffer pool 中尚未被 flushed 的 dirty page
+* ARIES Recorvery Algorithm
+ARIES Recorvery 需要经历三个 phases:
+ * Analysis Phase
+ * Redo Phase
+ * Undo Phase
+** Analysis Phase
+从 on-disk system 中取出 *MasterRecord*, 可以直接找到最后一次成功的 <CHECKPOINT-BEGIN> 的 WAL, 从此处开始重新构建 ATT, DPT
+
+对所有的 WAL records:
+ * 如果 WAL 的 trx 不在 ATT 裡, create 一个 ATT entry, 将其加入 ATT 并设為 U: Undo candidate
+ * 如果 WAL 是 <TRX-COMMIT>, 将其 ATT entry status 设為 C: Commit
+ * 如果 WAL 是 <TRX-END>, 将其移出 ATT
+
+并且, 对于 update records 的 page $$ P $$:
+ * 如果 $$ P \notin DPT $$, 则表示该 WAL 是第一次使 $$ P $$ 成為 dirty page 的 WAP, 将 $$ P $$ 加入 $$ DPT $$, 并将其 $$ recLSN := LSN$$
+
+直到走到 WAL 结束, 表示此时 ATT, DPT 是崩溃发生时的状态:
+#+ATTR_ORG: :width 60% :page 1
+[[./images/analysis-phase-example.pdf]]
+** Redo Phase
+Analysis Phase 结束时:
+ * DPT 已经在 Analysis Phase 被推进到 crash 时的 DPT
+ * 所有 DPT 的 page, 都已经有正确的 $$ recLSN $$
+
+Rodo Phase 从 DPT 中, $$ recLSN $$ 最小的开始, 对于所有的 update records 和 $$ CLR $$, 都需要 *redo*, 除非满足以下条件之一:
+ * page 不在 DPT 内, 说明 crash 时 page 不是 dirty page, *or*
+ * page 在 DPT 内, 但其 $$ LSN < recLSN $$, 表示该 WAL 不是造成本次 dirty page 的 WAL
+
+*redo action* 是以下一系列操作:
+ * reapply logged update to buffered page
+ * update $$ pageLSN $$ to log's $$ LSN $$
+
+*redo action* 不做额外的 logging, 也不做 flush page, 因此中途失败最多是重新经历 Analysis Phase 和 Redo Phase
+在所有 *redo action* 做完后, 对在 ATT 中所有已经是 C 状态的 trx:
+ * 写入一个 <TRX-END>
+ * 将 trx 移出 ATT
+** Undo Phase
+Undo Phase 开始时, ATT 只会剩下 U 状态的 trx, 并且 ATT 的状态已经被推进到 crash 发生时的状态, 所以每个 ATT 中 trx 的 $$ lastLSN $$ 都是该 trx 最后一次对 page 造成影响的 $$ LSN $$
+*undo action*:
+ * 透过 $$ lastLSN $$ 找到最新一笔 WAL
+ * 生成对应的 $$ CLR $$
+ * update page 的 $$ pageLSN $$
+ * apply undo to buffered page

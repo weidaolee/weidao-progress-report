@@ -1,0 +1,59 @@
+#+title: Progress Report
+#+OPTIONS: \n:t
+进度可以根据指定阅读的三个章节分為三条脉络:
+ * Concurrency Control
+   指定阅读只讨论了 Locking, 而我扩展到更大的 Concurrency Control, 这部份我延伸学习、阅读的资源有: [[ttps://15445.courses.cs.cmu.edu/fall2022/schedule.html][CMU 15-445]], [[http://library.lol/main/43B30281F150C7286606EBE3A7D1D66E][Database system concepts]], [[https://www.dedao.cn/ebook/detail?id=YxRj1dbLGNgA2oaD6VBevmQZ7rnbYWmdZa0kyOKRMzJpX9lP5dxqE41j8De2pmOP][数据库事务处理的艺术：事务管理与并发控制]], [[https://juejin.cn/book/6844733769996304392?scrollMenuIndex=1][MySQL 是怎样运行的：从根儿上理解 MySQL]] 等。 理论方面我意识到, 基础的 Concurrency Control 除了 2PL (S2PL 和 SS2PL) 之外, 还有 Time Ordering, Validation based, Commit Ordering 等等, 而基于基础的 Concurrency Control 又可以有不同的 MVCC 实现 (虽然我已知的 InnoDB 和 PostgreSQL 的 MVCC 都是基于 SS2PL), 而 B+ tree 的实现以及对 trx 的实现都与这部份有关连, 这部份笔记还在持续整理和消化。
+ * DBMS Recorvery
+   指定阅读对于 ARIES 讨论篇幅较少, 我针对 ARIES 的内容做了笔记, 请见 [[./DBMS-recorvery-and-ARIES.org][DBMS Recorvery and ARIES]]. 在这部份读完后, 有试图去了解 InnoDB 的 recorvery 机制, 但这需要对 InnoDB 的 B+ tree, WAL, MVCC 机制等有更深入的研究, 另外我有发现 MySQL 8.0 版本有许多重大改变, 这部份将在持续推进。
+ * Distributed DBMS (in progress)
+   指定阅读中只讨论了 2PC, 而我希望扩展到更大的 Distributed DBMS, 这部份正在进行中, 预计一周之内可以完成。
+* Materials and References
+这部份是除了指定阅读外延伸阅读的整理, 会随后续学习持续完善
+** Materials
+ * [[https://libgen.is/book/index.php?md5=7C0DDFDB9E03E6B804E8427D394CB4B6][Principles of transaction processing 2nd edition]]
+   陈亮指定阅读 chapter 6, 7, and 8
+ * [[http://library.lol/main/43B30281F150C7286606EBE3A7D1D66E][Database system concepts]]
+   CMU 15-445 的参考书目
+ * [[https://www.dedao.cn/ebook/detail?id=YxRj1dbLGNgA2oaD6VBevmQZ7rnbYWmdZa0kyOKRMzJpX9lP5dxqE41j8De2pmOP][数据库事务处理的艺术：事务管理与并发控制]]
+   本书从工程实践的角度重新梳理前两本书籍提到的 concurrent control 部份, 包含:
+    * 实现 consistency (ACID 中的 C) 需要的必要条件
+    * 不同的 concurrency control 技术
+    * 基于不同的 concurrency control 的 MVCC 实现
+    * 介绍了 4 种 DBMS 的工程实践, 以及 PostgreSQL 和 InnoDB 的源码级的阅读
+   我非常推荐本书, 主要原因有以下:
+    * 补充了理论到实践的 gap
+    * 每项技术都介绍了相关的里程碑级的论文
+ * [[https://juejin.cn/book/6844733769996304392?scrollMenuIndex=1][MySQL 是怎样运行的：从根儿上理解 MySQL]]
+   系统整理了 InnoDB 的工作机制, 在阅读 system recovery 相关理论时常常复习本书 redo 和 undo 的运作机制
+** References
+*** Concurrency Control
+ * [[https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/tr-95-51.pdf][A Critique of ANSI SQL Isolation Levels]]
+   ANSI SQL 定义的并发事务导致的异常只有三种, 且主要是由 *读-写*, *写-读* 并发事务导致的, 这篇论文提出了 *写-写* 并发事务导致的异常 (dirty write, lost update), 以及 constraint 被打破的其他异常 (read skew, write skew), 并提出了 ANSI SQL 标准之外的隔离标准。 我个人认為, 隔离标准或许是不重要的, 因為各家 DBMS 宣称所支持隔离标准既没符合 ANSI SQL 定义, 也没符合这篇论文对这些隔离标准的定义; 相比之下, 该论文提及的 *并发事务导致的异常* 以及对这些异常的定义是有价值的, 因為我们需要去验证每个 DBMS 所宣称的隔离级别对于每种异常的真实表现。
+ * [[https://zhuanlan.zhihu.com/p/38334464][论文学习-A Critique of ANSI SQL Isolation Levels论文实验]]
+   知呼上的这篇文章对 Oracle, PostgreSQL, MySQL 各个隔离级别测试了 [[https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/tr-95-51.pdf][A Critique of ANSI SQL Isolation Levels]] 提到的每种异常做了测试。
+*** SI or SSI
+与 SI 和 SSI 相关的论文
+ * Database Replication Using Generalized Snapshot Isolation
+ * Making snapshot isolation serializable
+ * Serializable Isolation for Snapshot Databases
+*** B+ tree concurrency control
+...
+*** DBMS recovery
+对于 DBMS recovery 比较好的入门我认為是 [[ttps://15445.courses.cs.cmu.edu/fall2022/schedule.html][CMU 15-445]] 的两个 lectures (ps: 以下 hyperlink 是两个 lectures 各 6 页的 notes):
+ * [[https://15445.courses.cs.cmu.edu/fall2022/notes/19-logging.pdf][Lecture 19: Database Logging]]
+    * 介绍 buffer pool management 四种维度的 log 策略: steal/no-steal, force/no-force
+    * 介绍 shadow paging 机制 (属于 no-steal, force 策略)
+    * 讨论為何 Write-Ahead Logging (属于 steal, no-force 策略) 最终胜出
+ * [[https://www.youtube.com/watch?v=xoZmZGKxRYM&list=PLSE8ODhjZXjaKScG3l0nuOiDTTqpfnWFf&index=20][Lecture 20: Database Recovery]]
+   介绍 ARIES (Algorithm for Recovery and Isolation Exploiting Semantics) 的 scenario
+对于 DBMS recovery, 阿里月报有两篇回顾性的文章:
+ * [[http://mysql.taobao.org/monthly/2019/01/01/][POLARDB · 理论基础 · 数据库故障恢复机制的前世今生]]
+ * [[http://mysql.taobao.org/monthly/2022/10/04/][B+树数据库故障恢复概述]]
+对于 InnoDB 恢复机制, 阿里月报的文章:
+ * [[http://mysql.taobao.org/monthly/2018/07/01/][MySQL · 引擎特性 · WAL那些事儿]]
+ * [[ttp://mysql.taobao.org/monthly/2017/07/01/][MySQL · 引擎特性 · InnoDB崩溃恢复]]
+ * [[http://mysql.taobao.org/monthly/2015/06/01/][MySQL · 引擎特性 · InnoDB 崩溃恢复过程]]
+* MySQL 8.0 新特性
+目前只有列一个, 但目前有看到 MySQL 8.0 对 WAL protocol 和 redo log 都做了很多变化, 持续整理中
+ * [[https://blog.csdn.net/Fei20140908/article/details/109718602][Contention-aware lock scheduling for transactional databases]]
+   这部份是在 InnoDB 源码的 doc 中找到的, MySQL 8.0 支持了这个方法, 用于管理 trx 的优先级, 其想法是: 某个 trx 持有某个 lock, 而这个 lock 会 block 更多的 trx, 则该 trx 应有更高的优先级。 方法是利用 dependency graph 来分析, 给定一个 dependency graph G, 当一个 trx T 释放 object O 的一个 lock (S 或 X), 将该 lock 调度给某个正在请求该 lock 的 trx, 使得所有 trx 的运行时间 (执行时间 + 等待时间) 最小。
