@@ -61,7 +61,7 @@ Consistent Checkpoint 是最 naive 的实现机制:
  4. Write a <Checkpoint> entry to WAL and flush to disk
  5. Resume queries
 #+ATTR_ORG: :width 60% :page 1
-[[./images/consistent-checkpoint-example.pdf]]
+[[./images/consistent-checkpoint-example.jpg]]
 在崩溃恢复时, 以最后一个(最新的) <Checkpoint> 做為分析的起点:
  * 在 <Checkpoint> 以前, 已经 committed 的 trx 不需要处理
  * 在 <Checkpoint> 以前, 尚未 committed 的 trx 需要 REDO
@@ -78,7 +78,7 @@ ARIES 在 in-memory system 和 on-disk system 都需要纪录并 track 一些额
 
 并且, 每一个 component 需要 track 属于自己负责的 *LSNs*:
 #+ATTR_ORG: :width 60% :page 1
-[[./images/LSNs.pdf]]
+[[./images/LSNs.jpg]]
  * *flushedLSN* 在 in-memory system 中, 负责 track 最新一笔被 write to disk 的 LSN
  * *recLSN* 在 page 中, 负责 track 第一笔导致该 *page* 成為 dirty page 的 LSN
  * *pageLSN* 在 page 中, 负责 track 最新一笔 update *page* 的 LSN
@@ -158,7 +158,7 @@ ARIES Recorvery 需要经历三个 phases:
 
 直到走到 WAL 结束, 表示此时 ATT, DPT 是崩溃发生时的状态:
 #+ATTR_ORG: :width 60% :page 1
-[[./images/analysis-phase-example.pdf]]
+[[./images/analysis-phase-example.jpg]]
 ** Redo Phase
 Analysis Phase 结束时:
  * DPT 已经在 Analysis Phase 被推进到 crash 时的 DPT
